@@ -11,7 +11,7 @@ from langchain.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field, computed_field
 
-from ..models.schemas import UserInfo
+from ..models.schemas import AgentProfile, UserInfo
 
 
 class AgentState(BaseModel):
@@ -38,6 +38,13 @@ class AgentState(BaseModel):
         description="从长期记忆加载的用户信息，用于个性化对话",
     )
 
+    # ── Agent 个性化配置 ──
+    # 用户设置的 Agent 身份信息（名字、性格、称呼等），注入到 system prompt 中
+    agent_profile: AgentProfile | None = Field(
+        default=None,
+        description="用户设置的 Agent 个性化配置（名字、性格、称呼等）",
+    )
+
     # ── 用户信息提取控制 ──
     should_extract_user_info: bool = Field(
         default=False,
@@ -46,6 +53,16 @@ class AgentState(BaseModel):
     extracted_user_info: UserInfo | None = Field(
         default=None,
         description="本轮对话中提取出的用户信息（待持久化）",
+    )
+
+    # ── Agent 配置提取控制 ──
+    should_extract_agent_profile: bool = Field(
+        default=False,
+        description="是否需要提取并保存 Agent 个性化配置",
+    )
+    extracted_agent_profile: AgentProfile | None = Field(
+        default=None,
+        description="本轮对话中提取出的 Agent 配置（待持久化）",
     )
 
     @computed_field

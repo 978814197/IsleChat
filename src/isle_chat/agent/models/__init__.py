@@ -5,11 +5,13 @@
 """
 
 from .llm import get_analyzer_llm, get_primary_llm
-from .schemas import UserInfo, UserInfoExtractionResult
+from .schemas import AgentProfile, AgentProfileExtractionResult, UserInfo, UserInfoExtractionResult
 
 __all__ = [
     "get_primary_llm",
     "get_analyzer_llm",
+    "AgentProfile",
+    "AgentProfileExtractionResult",
     "UserInfo",
     "UserInfoExtractionResult",
 ]

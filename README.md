@@ -41,14 +41,21 @@ IsleChat 基于 [LangGraph](https://langchain-ai.github.io/langgraph/) StateGrap
 START
   │
   ▼
-generate_assistant_response    ← 生成 AI 回复（带记忆上下文）
+load_memory                              ← 从 Store 加载用户画像 + Agent 配置
   │
   ▼
-should_extract_user_info       ← 分析对话是否包含用户信息
+generate_assistant_response              ← 生成 AI 回复（带记忆上下文）
   │
-  ├──（需要提取）──▶ save_user_info ──▶ END
-  │
-  └──（不需要）──▶ END
+  ├───────────────────────┐
+  ▼                       ▼
+should_extract          should_extract
+_user_info              _agent_profile   ← 并行分析：用户信息 & Agent 配置
+  │                       │
+  ├─(需要)→ save          ├─(需要)→ save
+  │  _user_info           │  _agent_profile
+  │    │                  │    │
+  │    ▼                  │    ▼
+  └──→ END                └──→ END
 ```
 
 ## 📦 安装

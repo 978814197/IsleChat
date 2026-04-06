@@ -13,14 +13,22 @@ from langchain.messages import AnyMessage, SystemMessage
 from langchain_core.messages import AIMessage
 
 from ...models.llm import get_primary_llm
-from ...models.schemas import UserInfo
+from ...models.schemas import AgentProfile, UserInfo
 
 
-# Agent 基础人设 prompt
-_BASE_SYSTEM_PROMPT = (
+# Agent 默认基础人设 prompt（当用户未设置 Agent 配置时使用）
+_DEFAULT_SYSTEM_PROMPT = (
     "你是一个温暖、友善的长期陪伴型聊天助手。"
     "你会记住用户告诉你的信息，并在后续对话中自然地引用这些信息。"
     "保持轻松愉快的对话风格，像朋友一样陪伴用户。"
+)
+
+# Agent 个性化配置模板，当用户设置了 Agent 配置时用于构建人设 prompt
+_AGENT_PROFILE_TEMPLATE = (
+    "你是一个长期陪伴型聊天助手。"
+    "你会记住用户告诉你的信息，并在后续对话中自然地引用这些信息。"
+    "\n\n以下是你的身份设定，请始终以这个身份与用户交流：\n"
+    "{agent_details}"
 )
 
 # 用户记忆上下文模板，当有记忆信息时拼接到 system prompt 中
@@ -30,17 +38,47 @@ _MEMORY_CONTEXT_TEMPLATE = (
 )
 
 
-def _build_system_prompt(memory_context: UserInfo | None) -> SystemMessage:
-    """构建包含用户记忆上下文的 system prompt。
+def _build_system_prompt(
+    memory_context: UserInfo | None = None,
+    agent_profile: AgentProfile | None = None,
+) -> SystemMessage:
+    """构建包含 Agent 人设和用户记忆上下文的 system prompt。
 
-    如果存在用户的长期记忆信息，会将其格式化后追加到基础人设 prompt 中，
-    使 Agent 能够个性化地回复用户。
+    prompt 构建顺序：
+    1. Agent 人设（若用户设置了 Agent 配置则使用自定义人设，否则使用默认人设）
+    2. 用户记忆上下文（若存在）
 
     :param memory_context: 从长期记忆加载的用户信息，可能为 None。
+    :param agent_profile: 用户设置的 Agent 个性化配置，可能为 None。
     :return: 构建好的 SystemMessage。
     """
-    prompt = _BASE_SYSTEM_PROMPT
+    # ── 第一部分：Agent 人设 ──
+    if agent_profile is not None:
+        # 用户设置了 Agent 配置，构建自定义人设
+        agent_details = []
+        if agent_profile.agent_name:
+            agent_details.append(f"- 你的名字是：{agent_profile.agent_name}")
+        if agent_profile.user_nickname:
+            agent_details.append(f"- 你称呼用户为：{agent_profile.user_nickname}")
+        if agent_profile.personality:
+            agent_details.append(f"- 你的性格：{agent_profile.personality}")
+        if agent_profile.speaking_style:
+            agent_details.append(f"- 你的说话风格：{agent_profile.speaking_style}")
+        if agent_profile.custom_instructions:
+            agent_details.append(f"- 额外设定：{agent_profile.custom_instructions}")
 
+        if agent_details:
+            prompt = _AGENT_PROFILE_TEMPLATE.format(
+                agent_details="\n".join(agent_details),
+            )
+        else:
+            # Agent 配置存在但所有字段都为空，回退到默认人设
+            prompt = _DEFAULT_SYSTEM_PROMPT
+    else:
+        # 未设置 Agent 配置，使用默认人设
+        prompt = _DEFAULT_SYSTEM_PROMPT
+
+    # ── 第二部分：用户记忆上下文 ──
     if memory_context is not None:
         # 将用户信息格式化为可读的文本片段
         details = []
@@ -65,18 +103,20 @@ def _build_system_prompt(memory_context: UserInfo | None) -> SystemMessage:
 async def generate_response(
     messages: list[AnyMessage],
     memory_context: UserInfo | None = None,
+    agent_profile: AgentProfile | None = None,
 ) -> AIMessage:
     """生成 Agent 的对话回复。
 
-    将用户的消息历史连同 system prompt（包含记忆上下文）一起
-    发送给主模型，生成个性化的回复。
+    将用户的消息历史连同 system prompt（包含 Agent 人设和记忆上下文）
+    一起发送给主模型，生成个性化的回复。
 
     :param messages: 完整的对话消息历史列表。
     :param memory_context: 从长期记忆加载的用户信息，用于个性化回复。
+    :param agent_profile: 用户设置的 Agent 个性化配置，影响 Agent 的人设和行为。
     :return: 模型生成的 AI 回复消息。
     """
-    # 构建带有记忆上下文的 system prompt
-    system_message = _build_system_prompt(memory_context)
+    # 构建带有 Agent 人设和记忆上下文的 system prompt
+    system_message = _build_system_prompt(memory_context, agent_profile)
 
     # 将 system prompt 放在消息列表最前面，然后拼接对话历史
     full_messages = [system_message] + messages

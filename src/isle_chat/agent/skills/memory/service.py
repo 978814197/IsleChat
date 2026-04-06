@@ -11,7 +11,8 @@ graph 节点只需调用 MemoryService 的方法，无需关心
 from langchain.messages import AnyMessage
 from langgraph.store.base import BaseStore
 
-from ...models.schemas import UserInfo, UserInfoExtractionResult
+from ...models.schemas import AgentProfile, AgentProfileExtractionResult, UserInfo, UserInfoExtractionResult
+from .analyzer import analyze_agent_profile as _analyze_agent_profile
 from .analyzer import analyze_conversation
 from .repository import MemoryRepository
 
@@ -59,6 +60,17 @@ class MemoryService:
         """
         return await analyze_conversation(latest_turn)
 
+    async def analyze_agent_profile(self, latest_turn: list[AnyMessage]) -> AgentProfileExtractionResult:
+        """分析最近一轮对话，判断是否包含用户对 Agent 身份/行为的设置指令。
+
+        将分析工作委托给 analyzer 模块，判断用户是否在设置 Agent 的
+        名字、性格、称呼方式、说话风格或其他自定义指令。
+
+        :param latest_turn: 最近一轮对话消息列表。
+        :return: 提取结果，包含是否需要提取的标志和提取出的 Agent 配置。
+        """
+        return await _analyze_agent_profile(latest_turn)
+
     async def save(self, store: BaseStore, user_id: int, user_info: UserInfo) -> None:
         """将提取的用户信息保存到长期记忆中。
 
@@ -83,6 +95,31 @@ class MemoryService:
         :return: 用户信息对象，若不存在则返回 None。
         """
         return await self._repository.load(store, user_id)
+
+    async def load_agent_profile(self, store: BaseStore, user_id: int) -> AgentProfile | None:
+        """从长期记忆中加载用户设置的 Agent 个性化配置。
+
+        用于在对话开始时加载 Agent 的名字、性格、称呼方式等配置，
+        注入到 system prompt 中影响 Agent 的回复行为。
+
+        :param store: LangGraph Store 实例（通过 runtime.store 获取）。
+        :param user_id: 用户唯一标识 ID。
+        :return: Agent 配置对象，若不存在则返回 None。
+        """
+        return await self._repository.load_agent_profile(store, user_id)
+
+    async def save_agent_profile(
+        self, store: BaseStore, user_id: int, agent_profile: AgentProfile
+    ) -> None:
+        """将用户设置的 Agent 个性化配置保存到长期记忆中。
+
+        如果已有配置，会自动合并更新（新值非空时覆盖旧值）。
+
+        :param store: LangGraph Store 实例（通过 runtime.store 获取）。
+        :param user_id: 用户唯一标识 ID。
+        :param agent_profile: 待保存的 Agent 配置。
+        """
+        await self._repository.save_agent_profile(store, user_id, agent_profile)
 
 
 # 全局记忆服务实例（单例）

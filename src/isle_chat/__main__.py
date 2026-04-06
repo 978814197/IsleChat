@@ -39,7 +39,7 @@ async def main() -> None:
 
         # 执行一轮对话
         response = await app.ainvoke(
-            AgentState(messages=[HumanMessage("你好啊，我的名字叫做屿你有关")]),
+            AgentState(messages=[HumanMessage("你好啊，我的名字叫做屿你有关，你以后就叫小屿吧！")]),
             config=config,
             context=AgentContext(user_id=1),
         )
