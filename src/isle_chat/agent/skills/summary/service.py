@@ -13,7 +13,7 @@ from langchain.messages import AnyMessage, HumanMessage
 from langchain_core.messages import RemoveMessage
 from langchain_core.messages.utils import count_tokens_approximately
 
-from ...core.settings import settings
+from ....core.settings import settings
 from ...models.llm import get_analyzer_llm
 
 # ── 摘要 prompt 模板 ──
