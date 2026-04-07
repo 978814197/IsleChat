@@ -35,6 +35,7 @@ def _build_chat_model(model_name: str) -> BaseChatModel:
         api_key=llm_settings.api_key.get_secret_value(),
         model=model_name,
         model_provider="openai",
+        reasoning_effort="low",
     )
 
 

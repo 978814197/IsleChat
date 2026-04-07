@@ -17,7 +17,6 @@ from langchain.messages import AnyMessage, SystemMessage
 from ...models.llm import get_analyzer_llm
 from ...models.schemas import AgentProfileExtractionResult, UserInfoExtractionResult
 
-
 # ── 用户信息分析器的 system prompt 模板 ──
 _USER_INFO_ANALYZER_PROMPT = (
     "你是用户信息提取器。"
@@ -63,6 +62,11 @@ async def analyze_conversation(latest_turn: list[AnyMessage]) -> UserInfoExtract
     response = await analyzer_llm.ainvoke(
         [system_message] + latest_turn,
         response_format={"type": "json_object"},
+        extra_body={
+            "thinking": {
+                "type": "disabled"
+            }
+        }
     )
 
     # 将 LLM 的 JSON 输出解析为结构化对象
@@ -93,6 +97,11 @@ async def analyze_agent_profile(latest_turn: list[AnyMessage]) -> AgentProfileEx
     response = await analyzer_llm.ainvoke(
         [system_message] + latest_turn,
         response_format={"type": "json_object"},
+        extra_body={
+            "thinking": {
+                "type": "disabled"
+            }
+        }
     )
 
     # 将 LLM 的 JSON 输出解析为结构化对象

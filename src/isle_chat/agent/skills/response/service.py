@@ -15,7 +15,6 @@ from langchain_core.messages import AIMessage
 from ...models.llm import get_primary_llm
 from ...models.schemas import AgentProfile, UserInfo
 
-
 # Agent 默认基础人设 prompt（当用户未设置 Agent 配置时使用）
 _DEFAULT_SYSTEM_PROMPT = (
     "你是一个温暖、友善的长期陪伴型聊天助手。"
@@ -37,19 +36,42 @@ _MEMORY_CONTEXT_TEMPLATE = (
     "{memory_details}"
 )
 
+# 首次引导用户设置个人信息和 Agent 配置的 prompt 片段
+_SETUP_PROMPT_HINT = (
+    "\n\n【重要】这是你与用户的初次交流，用户还没有设置任何个人信息和你的身份配置。"
+    "请在自然回复的同时，友好地引导用户告诉你以下信息："
+    "\n关于用户自己："
+    "\n- 名字或称呼（例如'小明'、'阿花'）"
+    "\n- 所在城市"
+    "\n- 职业"
+    "\n- 兴趣爱好或偏好"
+    "\n关于你（Agent）的设定："
+    "\n- 给你起一个名字（例如'小岛'）"
+    "\n- 希望你怎么称呼用户（例如'主人'、'小屿'）"
+    "\n- 你的性格（例如'温柔体贴'、'活泼可爱'）"
+    "\n- 你的说话风格（例如'喜欢用颜文字'、'语气俏皮'）"
+    "\n- 其他额外设定或指令"
+    "\n\n注意：语气要自然轻松，像朋友一样建议，不要像表单一样逐条列举。"
+    "可以在聊天过程中自然地引出这些话题，不需要一次性全部问完。"
+    "只需要提一次，不要反复催促。"
+)
+
 
 def _build_system_prompt(
-    memory_context: UserInfo | None = None,
-    agent_profile: AgentProfile | None = None,
+        memory_context: UserInfo | None = None,
+        agent_profile: AgentProfile | None = None,
+        should_prompt_setup: bool = False,
 ) -> SystemMessage:
     """构建包含 Agent 人设和用户记忆上下文的 system prompt。
 
     prompt 构建顺序：
     1. Agent 人设（若用户设置了 Agent 配置则使用自定义人设，否则使用默认人设）
     2. 用户记忆上下文（若存在）
+    3. 首次引导提示（若需要引导用户设置）
 
     :param memory_context: 从长期记忆加载的用户信息，可能为 None。
     :param agent_profile: 用户设置的 Agent 个性化配置，可能为 None。
+    :param should_prompt_setup: 是否需要引导用户设置个人信息和 Agent 配置。
     :return: 构建好的 SystemMessage。
     """
     # ── 第一部分：Agent 人设 ──
@@ -97,13 +119,18 @@ def _build_system_prompt(
                 memory_details="\n".join(details),
             )
 
+    # ── 第三部分：首次引导提示 ──
+    if should_prompt_setup:
+        prompt += _SETUP_PROMPT_HINT
+
     return SystemMessage(content=prompt)
 
 
 async def generate_response(
-    messages: list[AnyMessage],
-    memory_context: UserInfo | None = None,
-    agent_profile: AgentProfile | None = None,
+        messages: list[AnyMessage],
+        memory_context: UserInfo | None = None,
+        agent_profile: AgentProfile | None = None,
+        should_prompt_setup: bool = False,
 ) -> AIMessage:
     """生成 Agent 的对话回复。
 
@@ -113,14 +140,22 @@ async def generate_response(
     :param messages: 完整的对话消息历史列表。
     :param memory_context: 从长期记忆加载的用户信息，用于个性化回复。
     :param agent_profile: 用户设置的 Agent 个性化配置，影响 Agent 的人设和行为。
+    :param should_prompt_setup: 是否需要引导用户设置个人信息和 Agent 配置。
     :return: 模型生成的 AI 回复消息。
     """
-    # 构建带有 Agent 人设和记忆上下文的 system prompt
-    system_message = _build_system_prompt(memory_context, agent_profile)
+    # 构建带有 Agent 人设、记忆上下文和引导提示的 system prompt
+    system_message = _build_system_prompt(memory_context, agent_profile, should_prompt_setup)
 
     # 将 system prompt 放在消息列表最前面，然后拼接对话历史
     full_messages = [system_message] + messages
 
     # 调用主模型生成回复
     primary_llm = get_primary_llm()
-    return await primary_llm.ainvoke(full_messages)
+    return await primary_llm.ainvoke(
+        full_messages,
+        extra_body={
+            "thinking": {
+                "type": "disabled"
+            }
+        }
+    )

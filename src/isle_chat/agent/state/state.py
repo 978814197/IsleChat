@@ -55,6 +55,13 @@ class AgentState(BaseModel):
         description="本轮对话中提取出的用户信息（待持久化）",
     )
 
+    # ── 首次引导设置标志 ──
+    # 当用户信息和 Agent 配置都为空且从未提醒过时，引导用户设置
+    should_prompt_setup: bool = Field(
+        default=False,
+        description="是否需要在回复中引导用户设置个人信息和 Agent 配置（仅首次）",
+    )
+
     # ── Agent 配置提取控制 ──
     should_extract_agent_profile: bool = Field(
         default=False,

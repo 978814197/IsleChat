@@ -145,3 +145,4 @@ class MemoryRepository:
             merged = agent_profile.model_dump()
 
         await store.aput(namespace, _AGENT_PROFILE_KEY, merged)
+
