@@ -3,7 +3,7 @@
 
 负责构建和编译 LangGraph 状态图，定义 Agent 的整体执行流程。
 
-当前图流程（三层记忆分析优化）::
+当前图流程（含对话摘要 + 三层记忆分析优化）::
 
     START
       │
@@ -11,17 +11,21 @@
     load_memory                        ← 从 Store 加载用户画像 + Agent 配置
       │
       ▼
-    generate_assistant_response        ← 生成 AI 回复（带记忆上下文）
-      │
-      ▼
-    check_and_analyze                  ← 规则预筛 + 合并分析（一次 LLM 调用）
-      │                                  若预筛未命中且未到兜底轮次 → 跳过分析
-      │
-      ├─(需要保存用户信息)→ save_user_info ──→ END
-      ├─(需要保存Agent配置)→ save_agent_profile ──→ END
-      └─(都不需要)→ END
+    should_summarize?                  ← 双条件判断（token容量 + 消息条数）
+      ├─(需要)→ summarize_conversation ← 增量摘要 + 物理删除旧消息
+      │              │
+      │              ▼
+      └─(不需要)→ generate_assistant_response ← 生成 AI 回复（带摘要 + 记忆上下文）
+                     │
+                     ▼
+                 check_and_analyze     ← 规则预筛 + 合并分析
+                     │
+                     ├─(需要保存用户信息)→ save_user_info ──→ END
+                     ├─(需要保存Agent配置)→ save_agent_profile ──→ END
+                     └─(都不需要)→ END
 
 优化效果：
+- 对话摘要：token 容量为主 + 消息条数兜底，确保不超上下文窗口
 - 闲聊对话：0 次分析 LLM 调用（规则预筛过滤）
 - 有效对话：1 次分析 LLM 调用（合并分析，原来需要 2 次）
 - 兜底机制：每 N 轮强制分析，防止遗漏
@@ -40,13 +44,14 @@ from langgraph.store.base import BaseStore
 
 from ..state.context import AgentContext
 from ..state.state import AgentState
-from .edges import route_after_analysis
+from .edges import route_after_analysis, route_after_load_memory
 from .nodes import (
     check_and_analyze,
     generate_assistant_response,
     load_memory,
     save_agent_profile,
     save_user_info,
+    summarize_conversation,
 )
 
 
@@ -59,15 +64,18 @@ def build_graph(
     创建一个 LangGraph 状态图，注册所有节点和边，
     然后编译为可执行的图实例。
 
-    图的执行流程（三层记忆分析优化）：
+    图的执行流程（含对话摘要 + 三层记忆分析优化）：
     1. 接收用户消息后，首先从 Store 加载用户画像和 Agent 配置
-    2. 基于加载的记忆上下文生成 AI 回复
-    3. 进入 check_and_analyze 节点：
+    2. 判断消息历史是否需要摘要压缩（双条件：token 容量 + 消息条数）
+       a. 需要 → 执行摘要节点，压缩旧消息为摘要并物理删除
+       b. 不需要 → 跳过
+    3. 基于加载的记忆上下文和对话摘要生成 AI 回复
+    4. 进入 check_and_analyze 节点：
        a. 规则预筛：关键词匹配判断是否可能包含有价值的信息
        b. 兜底判断：检查距上次分析是否已达 N 轮
        c. 若触发分析 → 一次 LLM 调用同时提取用户信息和 Agent 配置
        d. 若未触发 → 跳过分析，零 LLM 成本
-    4. 根据分析结果条件路由到保存节点（可并行）
+    5. 根据分析结果条件路由到保存节点（可并行）
 
     :param checkpointer: 检查点保存器（短期记忆），用于持久化对话历史。
         传入后，同一 thread_id 的对话消息会自动保存和恢复。
@@ -79,6 +87,7 @@ def build_graph(
 
     # ── 注册节点 ──
     graph.add_node("load_memory", load_memory)
+    graph.add_node("summarize_conversation", summarize_conversation)
     graph.add_node("generate_assistant_response", generate_assistant_response)
     graph.add_node("check_and_analyze", check_and_analyze)
     graph.add_node("save_user_info", save_user_info)
@@ -89,21 +98,29 @@ def build_graph(
     # 入口 → 加载长期记忆（用户画像 + Agent 配置）
     graph.add_edge(START, "load_memory")
 
-    # 加载记忆 → 生成回复（此时 state 中已有 memory_context 和 agent_profile）
-    graph.add_edge("load_memory", "generate_assistant_response")
+    # 加载记忆 → 判断是否需要摘要（双条件：token 容量 + 消息条数）
+    graph.add_conditional_edges(
+        "load_memory",
+        route_after_load_memory,
+        {
+            "summarize_conversation": "summarize_conversation",
+            "generate_assistant_response": "generate_assistant_response",
+        },
+    )
+
+    # 摘要完成 → 生成回复
+    graph.add_edge("summarize_conversation", "generate_assistant_response")
 
     # 生成回复 → 预筛判断 + 合并分析
     graph.add_edge("generate_assistant_response", "check_and_analyze")
 
-    # 分析完成后 → 根据结果条件路由（可并行保存，或直接结束）
+    # 分析完成后 → 根据结果条件路由（Send 并行保存，或直接结束）
+    # route_after_analysis 返回 str 或 Send 列表：
+    # - str: 单个节点名或 END，直接路由
+    # - list[Send]: 通过 Send 实现并行 fan-out 到多个保存节点
     graph.add_conditional_edges(
         "check_and_analyze",
         route_after_analysis,
-        {
-            "save_user_info": "save_user_info",
-            "save_agent_profile": "save_agent_profile",
-            END: END,
-        },
     )
 
     # 保存完成 → 结束

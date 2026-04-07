@@ -36,6 +36,12 @@ _MEMORY_CONTEXT_TEMPLATE = (
     "{memory_details}"
 )
 
+# 对话摘要模板，当有历史对话摘要时拼接到 system prompt 中
+_SUMMARY_TEMPLATE = (
+    "\n\n以下是你们之前对话的摘要，请在回复时参考这些上下文：\n"
+    "{summary}"
+)
+
 # 首次引导用户设置个人信息和 Agent 配置的 prompt 片段
 _SETUP_PROMPT_HINT = (
     "\n\n【重要】这是你与用户的初次交流，用户还没有设置任何个人信息和你的身份配置。"
@@ -61,17 +67,20 @@ def _build_system_prompt(
         memory_context: UserInfo | None = None,
         agent_profile: AgentProfile | None = None,
         should_prompt_setup: bool = False,
+        summary: str = "",
 ) -> SystemMessage:
-    """构建包含 Agent 人设和用户记忆上下文的 system prompt。
+    """构建包含 Agent 人设、用户记忆上下文和对话摘要的 system prompt。
 
     prompt 构建顺序：
     1. Agent 人设（若用户设置了 Agent 配置则使用自定义人设，否则使用默认人设）
     2. 用户记忆上下文（若存在）
-    3. 首次引导提示（若需要引导用户设置）
+    3. 对话历史摘要（若存在）
+    4. 首次引导提示（若需要引导用户设置）
 
     :param memory_context: 从长期记忆加载的用户信息，可能为 None。
     :param agent_profile: 用户设置的 Agent 个性化配置，可能为 None。
     :param should_prompt_setup: 是否需要引导用户设置个人信息和 Agent 配置。
+    :param summary: 旧对话的压缩摘要，为空字符串时不注入。
     :return: 构建好的 SystemMessage。
     """
     # ── 第一部分：Agent 人设 ──
@@ -119,7 +128,11 @@ def _build_system_prompt(
                 memory_details="\n".join(details),
             )
 
-    # ── 第三部分：首次引导提示 ──
+    # ── 第三部分：对话历史摘要 ──
+    if summary:
+        prompt += _SUMMARY_TEMPLATE.format(summary=summary)
+
+    # ── 第四部分：首次引导提示 ──
     if should_prompt_setup:
         prompt += _SETUP_PROMPT_HINT
 
@@ -131,20 +144,22 @@ async def generate_response(
         memory_context: UserInfo | None = None,
         agent_profile: AgentProfile | None = None,
         should_prompt_setup: bool = False,
+        summary: str = "",
 ) -> AIMessage:
     """生成 Agent 的对话回复。
 
-    将用户的消息历史连同 system prompt（包含 Agent 人设和记忆上下文）
+    将用户的消息历史连同 system prompt（包含 Agent 人设、记忆上下文和对话摘要）
     一起发送给主模型，生成个性化的回复。
 
     :param messages: 完整的对话消息历史列表。
     :param memory_context: 从长期记忆加载的用户信息，用于个性化回复。
     :param agent_profile: 用户设置的 Agent 个性化配置，影响 Agent 的人设和行为。
     :param should_prompt_setup: 是否需要引导用户设置个人信息和 Agent 配置。
+    :param summary: 旧对话的压缩摘要，注入 system prompt 以保留历史上下文。
     :return: 模型生成的 AI 回复消息。
     """
-    # 构建带有 Agent 人设、记忆上下文和引导提示的 system prompt
-    system_message = _build_system_prompt(memory_context, agent_profile, should_prompt_setup)
+    # 构建带有 Agent 人设、记忆上下文、对话摘要和引导提示的 system prompt
+    system_message = _build_system_prompt(memory_context, agent_profile, should_prompt_setup, summary)
 
     # 将 system prompt 放在消息列表最前面，然后拼接对话历史
     full_messages = [system_message] + messages

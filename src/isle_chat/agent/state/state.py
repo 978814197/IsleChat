@@ -72,6 +72,14 @@ class AgentState(BaseModel):
         description="本轮对话中提取出的 Agent 配置（待持久化）",
     )
 
+    # ── 对话历史摘要 ──
+    # 当消息数超过阈值时，旧消息被压缩为摘要并物理删除，
+    # 摘要会被注入 system prompt 以保留长期对话脉络
+    summary: str = Field(
+        default="",
+        description="旧对话的压缩摘要，在消息数超过阈值时由分析模型生成",
+    )
+
     # ── 分析窗口控制（三层记忆分析优化）──
     # 记录上次分析覆盖到的消息索引，避免重复分析已处理的消息
     last_analyzed_index: int = Field(

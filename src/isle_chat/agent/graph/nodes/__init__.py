@@ -11,9 +11,11 @@ from .memory import (
     save_user_info,
 )
 from .response import generate_assistant_response, load_memory
+from .summary import summarize_conversation
 
 __all__ = [
     "load_memory",
+    "summarize_conversation",
     "generate_assistant_response",
     "check_and_analyze",
     "save_user_info",
