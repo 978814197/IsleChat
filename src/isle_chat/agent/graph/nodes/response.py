@@ -40,6 +40,13 @@ async def load_memory(state: AgentState, runtime: Runtime[AgentContext]) -> dict
     :param runtime: LangGraph 运行时，携带 AgentContext 上下文和 Store 实例。
     :return: 状态更新字典，包含加载的记忆信息。
     """
+    # 如果之前已经引导过（should_prompt_setup 被置为 True），保持不变
+    # 避免重复引导，同时不依赖 checkpointer 隐式保留状态的细节
+    if state.should_prompt_setup:
+        return {
+            "should_prompt_setup": True,
+        }
+
     memory_context = None
     agent_profile = None
 
@@ -53,12 +60,8 @@ async def load_memory(state: AgentState, runtime: Runtime[AgentContext]) -> dict
         agent_profile = await memory_service.load_agent_profile(runtime.store, user_id)
 
     # 判断是否需要引导用户设置：用户信息和 Agent 配置都为空，
-    # 且当前会话中尚未引导过（should_prompt_setup 未被置为 True 过）
-    should_prompt_setup = (
-        memory_context is None
-        and agent_profile is None
-        and not state.should_prompt_setup  # False 表示还没引导过
-    )
+    # 且当前会话中尚未引导过（should_prompt_setup 为 False 表示还没引导过）
+    should_prompt_setup = memory_context is None and agent_profile is None
 
     return {
         "memory_context": memory_context,
@@ -88,12 +91,13 @@ async def generate_assistant_response(
     :param runtime: LangGraph 运行时，携带 AgentContext 上下文和 Store 实例。
     :return: 状态更新字典，包含新生成的回复消息。
     """
-    # 调用回复生成技能，传入对话历史、记忆上下文、Agent 配置和引导标志
+    # 调用回复生成技能，传入对话历史、记忆上下文、Agent 配置、引导标志和对话摘要
     message = await generate_response(
         messages=state.messages,
         memory_context=state.memory_context,
         agent_profile=state.agent_profile,
         should_prompt_setup=state.should_prompt_setup,
+        summary=state.summary,
     )
 
     # 返回新消息（should_prompt_setup 状态由 checkpointer 在同一 thread 内维护，
