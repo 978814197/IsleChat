@@ -36,17 +36,22 @@ async def main() -> None:
         config = RunnableConfig(
             configurable={"thread_id": "user-1-main"}
         )
+        while True:
+            # 获取用户输入
+            user_input = input("请输入你的问题：")
+            if not user_input:
+                continue
 
-        # 执行一轮对话
-        response = await app.ainvoke(
-            AgentState(messages=[HumanMessage("你好啊，我的名字叫做屿你有关，你以后就叫小屿吧！")]),
-            config=config,
-            context=AgentContext(user_id=1),
-        )
+            # 执行一轮对话
+            response = await app.ainvoke(
+                AgentState(messages=[HumanMessage(user_input)]),
+                config=config,
+                context=AgentContext(user_id=1),
+            )
 
-        # 打印最后一条 AI 回复
-        messages: list[AnyMessage] = response["messages"]
-        messages[-1].pretty_print()
+            # 打印最后一条 AI 回复
+            messages: list[AnyMessage] = response["messages"]
+            messages[-1].pretty_print()
 
 
 if __name__ == "__main__":
