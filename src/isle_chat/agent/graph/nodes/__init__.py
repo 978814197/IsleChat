@@ -6,18 +6,16 @@
 """
 
 from .memory import (
+    check_and_analyze,
     save_agent_profile,
     save_user_info,
-    should_extract_agent_profile,
-    should_extract_user_info,
 )
 from .response import generate_assistant_response, load_memory
 
 __all__ = [
     "load_memory",
     "generate_assistant_response",
-    "should_extract_user_info",
+    "check_and_analyze",
     "save_user_info",
-    "should_extract_agent_profile",
     "save_agent_profile",
 ]

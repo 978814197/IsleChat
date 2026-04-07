@@ -6,14 +6,18 @@
 
 graph 节点只需调用 MemoryService 的方法，无需关心
 分析和存储的内部实现细节。
+
+三层分析优化：
+1. should_trigger_analysis: 规则预筛 + 兜底计数判断
+2. analyze: 合并分析（一次 LLM 调用同时提取用户信息和 Agent 配置）
+3. save / save_agent_profile: 持久化提取结果
 """
 
 from langchain.messages import AnyMessage
 from langgraph.store.base import BaseStore
 
-from ...models.schemas import AgentProfile, AgentProfileExtractionResult, UserInfo, UserInfoExtractionResult
-from .analyzer import analyze_agent_profile as _analyze_agent_profile
-from .analyzer import analyze_conversation
+from ...models.schemas import AgentProfile, ConversationAnalysisResult, UserInfo
+from .analyzer import analyze_conversation, get_last_user_message, should_trigger_analysis
 from .repository import MemoryRepository
 
 
@@ -21,25 +25,10 @@ class MemoryService:
     """记忆服务。
 
     作为记忆技能的统一入口，封装了以下核心能力：
-    - analyze: 分析对话是否包含需要记忆的用户信息
-    - save: 将提取的用户信息持久化到 LangGraph Store
-    - load: 从 LangGraph Store 加载用户的长期记忆
-
-    所有涉及持久化的方法都需要传入 ``store`` 参数，
-    该参数在 graph 节点中通过 ``runtime.store`` 获取。
-
-    使用方式::
-
-        memory_service = MemoryService()
-
-        # 分析对话
-        result = await memory_service.analyze(latest_turn)
-
-        # 保存信息（store 来自 runtime.store）
-        await memory_service.save(store, user_id=1, user_info=result.user_info)
-
-        # 加载记忆
-        user_info = await memory_service.load(store, user_id=1)
+    - should_trigger: 规则预筛 + 兜底计数，判断是否需要触发 LLM 分析
+    - analyze: 统一分析对话（一次 LLM 调用同时提取用户信息和 Agent 配置）
+    - save / save_agent_profile: 将提取的信息持久化到 LangGraph Store
+    - load / load_agent_profile: 从 LangGraph Store 加载长期记忆
     """
 
     def __init__(self, repository: MemoryRepository | None = None) -> None:
@@ -49,27 +38,33 @@ class MemoryService:
         """
         self._repository = repository or MemoryRepository()
 
-    async def analyze(self, latest_turn: list[AnyMessage]) -> UserInfoExtractionResult:
-        """分析最近一轮对话，判断是否包含需要记忆的用户信息。
+    @staticmethod
+    def should_trigger(
+        messages: list[AnyMessage],
+        turns_since_last_analysis: int,
+    ) -> bool:
+        """判断是否需要触发 LLM 分析。
 
-        将分析工作委托给 analyzer 模块，该模块使用分析模型（较小的 LLM）
-        来判断对话中是否包含姓名、城市、职业、偏好等稳定信息。
+        基于规则预筛和兜底计数器判断，零 LLM 成本。
 
-        :param latest_turn: 最近一轮对话消息列表。
-        :return: 提取结果，包含是否需要提取的标志和提取出的用户信息。
+        :param messages: 当前对话消息列表。
+        :param turns_since_last_analysis: 距上次分析经过的轮次数。
+        :return: 是否需要触发分析。
         """
-        return await analyze_conversation(latest_turn)
+        user_message = get_last_user_message(messages)
+        return should_trigger_analysis(user_message, turns_since_last_analysis)
 
-    async def analyze_agent_profile(self, latest_turn: list[AnyMessage]) -> AgentProfileExtractionResult:
-        """分析最近一轮对话，判断是否包含用户对 Agent 身份/行为的设置指令。
+    @staticmethod
+    async def analyze(messages: list[AnyMessage]) -> ConversationAnalysisResult:
+        """统一分析对话，同时判断用户信息和 Agent 配置的提取需求。
 
-        将分析工作委托给 analyzer 模块，判断用户是否在设置 Agent 的
-        名字、性格、称呼方式、说话风格或其他自定义指令。
+        一次 LLM 调用同时完成用户信息提取和 Agent 配置提取，
+        减少 API 调用次数和延迟。
 
-        :param latest_turn: 最近一轮对话消息列表。
-        :return: 提取结果，包含是否需要提取的标志和提取出的 Agent 配置。
+        :param messages: 待分析的消息列表（从上次分析位置到当前的所有消息）。
+        :return: 统一分析结果。
         """
-        return await _analyze_agent_profile(latest_turn)
+        return await analyze_conversation(messages)
 
     async def save(self, store: BaseStore, user_id: int, user_info: UserInfo) -> None:
         """将提取的用户信息保存到长期记忆中。
@@ -87,9 +82,6 @@ class MemoryService:
     async def load(self, store: BaseStore, user_id: int) -> UserInfo | None:
         """从长期记忆中加载用户信息。
 
-        用于在对话开始时加载用户画像，注入到 system prompt 中
-        实现个性化陪伴。
-
         :param store: LangGraph Store 实例（通过 runtime.store 获取）。
         :param user_id: 用户唯一标识 ID。
         :return: 用户信息对象，若不存在则返回 None。
@@ -98,9 +90,6 @@ class MemoryService:
 
     async def load_agent_profile(self, store: BaseStore, user_id: int) -> AgentProfile | None:
         """从长期记忆中加载用户设置的 Agent 个性化配置。
-
-        用于在对话开始时加载 Agent 的名字、性格、称呼方式等配置，
-        注入到 system prompt 中影响 Agent 的回复行为。
 
         :param store: LangGraph Store 实例（通过 runtime.store 获取）。
         :param user_id: 用户唯一标识 ID。

@@ -11,7 +11,7 @@ from langchain.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field, computed_field
 
-from ..models.schemas import AgentProfile, UserInfo
+from ..models.schemas import AgentProfile, ConversationAnalysisResult, UserInfo
 
 
 class AgentState(BaseModel):
@@ -70,6 +70,23 @@ class AgentState(BaseModel):
     extracted_agent_profile: AgentProfile | None = Field(
         default=None,
         description="本轮对话中提取出的 Agent 配置（待持久化）",
+    )
+
+    # ── 分析窗口控制（三层记忆分析优化）──
+    # 记录上次分析覆盖到的消息索引，避免重复分析已处理的消息
+    last_analyzed_index: int = Field(
+        default=0,
+        description="上次分析覆盖到的消息位置（索引）",
+    )
+    # 距离上次分析经过的轮次数，用于兜底分析的计数器
+    turns_since_last_analysis: int = Field(
+        default=0,
+        description="距上次分析经过的轮次数",
+    )
+    # 本轮统一分析结果（合并了用户信息和 Agent 配置的提取结果）
+    analysis_result: ConversationAnalysisResult | None = Field(
+        default=None,
+        description="本轮统一分析结果",
     )
 
     @computed_field

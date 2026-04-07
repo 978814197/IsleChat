@@ -63,3 +63,18 @@ class AgentProfileExtractionResult(BaseModel):
     should_extract: bool = Field(..., description="是否需要提取并保存 Agent 配置")
     reason: str = Field(default="", description="判断原因（便于调试和日志记录）")
     agent_profile: AgentProfile | None = Field(default=None, description="提取出的 Agent 配置，仅在 should_extract=True 时有值")
+
+
+class ConversationAnalysisResult(BaseModel):
+    """统一的对话分析结果。
+
+    将用户信息提取和 Agent 配置提取合并为一次 LLM 调用的结构化输出，
+    同时判断对话中是否包含需要记忆的用户信息和 Agent 设置指令。
+    """
+
+    user_info_extraction: UserInfoExtractionResult = Field(
+        ..., description="用户信息提取结果",
+    )
+    agent_profile_extraction: AgentProfileExtractionResult = Field(
+        ..., description="Agent 配置提取结果",
+    )

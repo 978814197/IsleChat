@@ -3,7 +3,7 @@
 
 负责构建和编译 LangGraph 状态图，定义 Agent 的整体执行流程。
 
-当前图流程（并行分析）::
+当前图流程（三层记忆分析优化）::
 
     START
       │
@@ -13,16 +13,19 @@
       ▼
     generate_assistant_response        ← 生成 AI 回复（带记忆上下文）
       │
-      ├──────────────────────┐
-      ▼                      ▼
-    should_extract         should_extract
-    _user_info             _agent_profile     ← 并行分析：用户信息 & Agent 配置
-      │                      │
-      ├─(需要)→ save         ├─(需要)→ save
-      │  _user_info          │  _agent_profile
-      │    │                 │    │
-      │    ▼                 │    ▼
-      └──→ END               └──→ END
+      ▼
+    check_and_analyze                  ← 规则预筛 + 合并分析（一次 LLM 调用）
+      │                                  若预筛未命中且未到兜底轮次 → 跳过分析
+      │
+      ├─(需要保存用户信息)→ save_user_info ──→ END
+      ├─(需要保存Agent配置)→ save_agent_profile ──→ END
+      └─(都不需要)→ END
+
+优化效果：
+- 闲聊对话：0 次分析 LLM 调用（规则预筛过滤）
+- 有效对话：1 次分析 LLM 调用（合并分析，原来需要 2 次）
+- 兜底机制：每 N 轮强制分析，防止遗漏
+- 指针机制：避免重复分析已处理的消息
 
 持久化支持：
 - checkpointer: 短期记忆，自动保存/恢复对话历史（通过 thread_id 区分线程）
@@ -37,14 +40,13 @@ from langgraph.store.base import BaseStore
 
 from ..state.context import AgentContext
 from ..state.state import AgentState
-from .edges import route_after_agent_profile_extraction, route_after_user_info_extraction
+from .edges import route_after_analysis
 from .nodes import (
+    check_and_analyze,
     generate_assistant_response,
     load_memory,
     save_agent_profile,
     save_user_info,
-    should_extract_agent_profile,
-    should_extract_user_info,
 )
 
 
@@ -57,13 +59,15 @@ def build_graph(
     创建一个 LangGraph 状态图，注册所有节点和边，
     然后编译为可执行的图实例。
 
-    图的执行流程：
+    图的执行流程（三层记忆分析优化）：
     1. 接收用户消息后，首先从 Store 加载用户画像和 Agent 配置
     2. 基于加载的记忆上下文生成 AI 回复
-    3. 回复生成后，**并行**执行两个分析任务：
-       - 分析本轮对话是否包含需要记忆的用户信息
-       - 分析本轮对话是否包含用户对 Agent 的设置指令
-    4. 各分析任务独立判断是否需要保存，互不阻塞
+    3. 进入 check_and_analyze 节点：
+       a. 规则预筛：关键词匹配判断是否可能包含有价值的信息
+       b. 兜底判断：检查距上次分析是否已达 N 轮
+       c. 若触发分析 → 一次 LLM 调用同时提取用户信息和 Agent 配置
+       d. 若未触发 → 跳过分析，零 LLM 成本
+    4. 根据分析结果条件路由到保存节点（可并行）
 
     :param checkpointer: 检查点保存器（短期记忆），用于持久化对话历史。
         传入后，同一 thread_id 的对话消息会自动保存和恢复。
@@ -76,9 +80,8 @@ def build_graph(
     # ── 注册节点 ──
     graph.add_node("load_memory", load_memory)
     graph.add_node("generate_assistant_response", generate_assistant_response)
-    graph.add_node("should_extract_user_info", should_extract_user_info)
+    graph.add_node("check_and_analyze", check_and_analyze)
     graph.add_node("save_user_info", save_user_info)
-    graph.add_node("should_extract_agent_profile", should_extract_agent_profile)
     graph.add_node("save_agent_profile", save_agent_profile)
 
     # ── 定义边（执行流程）──
@@ -89,26 +92,15 @@ def build_graph(
     # 加载记忆 → 生成回复（此时 state 中已有 memory_context 和 agent_profile）
     graph.add_edge("load_memory", "generate_assistant_response")
 
-    # 生成回复后 → 并行 fan-out 到两个分析节点
-    # LangGraph 中，同一源节点添加多条边会自动并行执行目标节点
-    graph.add_edge("generate_assistant_response", "should_extract_user_info")
-    graph.add_edge("generate_assistant_response", "should_extract_agent_profile")
+    # 生成回复 → 预筛判断 + 合并分析
+    graph.add_edge("generate_assistant_response", "check_and_analyze")
 
-    # 用户信息分析完成后，根据结果条件路由
+    # 分析完成后 → 根据结果条件路由（可并行保存，或直接结束）
     graph.add_conditional_edges(
-        "should_extract_user_info",
-        route_after_user_info_extraction,
+        "check_and_analyze",
+        route_after_analysis,
         {
             "save_user_info": "save_user_info",
-            END: END,
-        },
-    )
-
-    # Agent 配置分析完成后，根据结果条件路由
-    graph.add_conditional_edges(
-        "should_extract_agent_profile",
-        route_after_agent_profile_extraction,
-        {
             "save_agent_profile": "save_agent_profile",
             END: END,
         },
